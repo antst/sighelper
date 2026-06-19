@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          args: --timeout=5m
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt check
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "Unformatted files:"; gofmt -s -l .; exit 1
+          fi
+
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: [lint]
+    strategy:
+      fail-fast: false
+      matrix:
+        # Supported platforms on fast native runners (no QEMU, no Intel-mac queue):
+        #   ubuntu-latest = linux/amd64, ubuntu-24.04-arm = linux/arm64,
+        #   macos-15 + macos-latest = darwin/arm64 on two macOS versions. (darwin/amd64
+        #   shares the same code and ships in the universal release binary; Intel-mac
+        #   runners are too slow to gate CI on.)
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build
+        run: go build -v ./...
+
+      - name: Test (race + coverage)
+        run: go test -race -coverprofile=coverage.out -timeout 300s ./...
+
+      - name: Coverage summary
+        if: matrix.os == 'ubuntu-latest'
+        run: go tool cover -func=coverage.out | tail -1
+
+      - name: Coverage gate (>=95% per package)
+        if: matrix.os == 'ubuntu-latest'
+        run: bash scripts/check-coverage.sh coverage.out

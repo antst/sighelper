@@ -1,0 +1,90 @@
+# golangci-lint v2 config for sighelper.
+# Adopts the org-standard Go lint profile (reference: alkem-io/file-service,
+# via alkemio/server-go). gosec is load-bearing here: this binary writes to
+# SSH agent sockets and must not regress on unsafe file/permission handling.
+
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - errorlint         # Catches direct error comparisons that fail on wrapped errors
+    - govet
+    - ineffassign
+    - staticcheck       # Includes stylecheck rules for error strings
+    - unused
+    - bodyclose
+    - gocyclo
+    - misspell
+    - unconvert
+    - unparam
+    - revive
+    - gocritic
+    - gosec             # Security: file perms, path handling, command exec
+    - prealloc
+    - whitespace
+  settings:
+    gocyclo:
+      min-complexity: 15
+    errcheck:
+      exclude-functions:
+        # Writes to stderr/stdout are conventionally unchecked.
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+    staticcheck:
+      checks:
+        - "all"
+        - "-ST1000"     # Don't require package comments (constitution: no obvious comments)
+    revive:
+      enable-all-rules: false
+      rules:
+        - name: package-comments
+          disabled: true              # Don't require package comments
+        - name: exported
+          disabled: true              # Don't require comments on every export
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+        - name: defer
+        - name: constant-logical-expr
+        - name: bool-literal-in-expr
+        - name: atomic
+        - name: error-strings    # Error strings should not be capitalized or end with punctuation
+  exclusions:
+    presets: []  # No default exclusion presets - we want all linter warnings
+    rules:
+      # Test code deliberately builds hostile fixtures (world-writable dirs) and execs
+      # ssh-keygen end-to-end; gosec's perm/subprocess checks don't apply to non-shipped tests.
+      - path: _test\.go
+        linters: [gosec]
+      # The signing proxy's purpose is to exec the real ssh-keygen and scan PATH for it
+      # (mirroring exec.LookPath). No untrusted input reaches these calls - reviewed safe.
+      - path: internal/proxy/proxy\.go
+        linters: [gosec]
+        text: 'G204|G703'
+      # `git config --get <constant>` - the key is a compile-time constant, not user input.
+      - path: internal/signkey/gitconfig\.go
+        linters: [gosec]
+        text: G204
+      # Reading the user's own configured signing-key file path is the intended behavior.
+      - path: internal/signkey/signkey\.go
+        linters: [gosec]
+        text: G304
+
+formatters:
+  enable:
+    - gofmt
+    - goimports       # Checks import sorting
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/antst/sighelper
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

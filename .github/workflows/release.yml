@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Pre-release tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go test -race -timeout 300s ./...
+
+  build-linux:
+    name: Build linux/${{ matrix.arch }}
+    needs: [validate]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, arch: amd64 }      # native amd64
+          - { os: ubuntu-24.04-arm, arch: arm64 }   # native arm64 runner
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Build
+        run: make dist GOOS=linux GOARCH=${{ matrix.arch }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sighelper-linux-${{ matrix.arch }}
+          path: dist/sighelper-linux-${{ matrix.arch }}
+
+  build-macos:
+    name: Build macos/universal
+    needs: [validate]
+    runs-on: macos-latest   # native arm64; amd64 slice is a Go cross-compile (no QEMU), then lipo
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Build universal binary
+        run: make dist-macos-universal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sighelper-macos-universal
+          path: dist/sighelper-macos-universal
+
+  release:
+    name: Publish release
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum sighelper-* > SHA256SUMS
+          ls -l
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd artifacts
+          gh release create "${{ github.ref_name }}" \
+            sighelper-linux-amd64 sighelper-linux-arm64 sighelper-macos-universal SHA256SUMS \
+            --repo "${{ github.repository }}" \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
